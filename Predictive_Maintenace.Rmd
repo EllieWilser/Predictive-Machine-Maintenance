@@ -1,0 +1,312 @@
+---
+title: "Machine Predictive Maintenance Classification"
+output:
+  html_document:
+    df_print: paged
+date: "2024-03-25"
+fontsize: 15pt
+---
+# Introduction
+  Predictive machine maintenance is vital in the future of manufacturing because it allows for timely repairs to machines before failures occur. In this project, I will demonstrate how common machine learning algorithms, such as decision trees and support vector machines, can be used in machine maintenance. Predictive maintenance is key in monitoring equipment and their conditions to more accurately predict when and what maintenance should be performed. This utilization of information can assist in minimizing downtime, optimize resource allocation, and most importantly reduce maintenance costs. The main idea is to implement past maintenance data to predict equipment failures before those failures occur.
+
+  Predictive maintenance is important in multiple practical ways, such as allowing companies to schedule routine maintenance more accurately, avoid unwarranted delays, as well as extending the duration of use of the machines. It is also important in theoretical ways. For example, it can also lead to interesting breakthroughs in terms of data mining and machine learning techniques. It does this by forcing the analyses of multiple volumes of data, which can be unbalanced or even have missing values, which can then be utilized to develop predictive models.
+
+  One of the primary challenges is the minimal amount of research previously done that addresses domain-specific issues and provides solutions to those issues. While it has been studied to an extensive degree, there are still important needs that should address specific characteristics for varying industries while also attempting to improve predictive accuracy amongst the models.
+
+
+## Preliminary Data Analysis
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = T, warning = F, message = F)
+```
+### Outline
+* Data Types of Variables
+* Steps for cleaning
+  * What variables are missing
+  * Outliers
+* Descriptive and Statistical Inference of the Data
+  * Data Summary
+  * Correlation Analysis
+
+
+
+```{r, include=FALSE}
+
+#Importing Libraries and Dataset
+
+maintenance = read.csv("/Users/ewilser/Downloads/predictive_maintenance.csv")
+
+```
+
+### Data Types of Variables
+
+
+```{r}
+for (column in colnames(maintenance)){
+  cat("The type of", column, "is",  typeof(column),"\n")
+  cat("\n")
+}
+```
+- All of the variables are characters. This means the ratio variables will need to be changed to either numeric data types like floats or integers.
+
+### Descriptive and Statistical Inference of the Data
+#### Summary
+
+```{r}
+summary(maintenance)
+```
+
+
+
+
+
+### Steps for Cleaning
+#### Missing data
+The following segment checks to see if there are any missing variables in the data set.
+
+```{r}
+# find location of missing values
+cat("Position of missing values ")
+which(is.na(maintenance))
+ 
+# count total missing values 
+cat("Count of total missing values  ")
+sum(is.na(maintenance))
+```
+
+There are not any missing values in the data set
+
+#### Structure Errors
+
+There are some structural errors that need to be cleaned like the data types, and some of the columns might need to be renamed.
+
+#### Outliers
+
+```{r}
+
+print_outliers <- function(col){
+
+  lowerbound <- quantile(col,.025)
+  upperbound <- quantile(col, .975 )
+  
+  #Counts outliers
+  outliers <- length(which(col < lowerbound | col > upperbound))
+ 
+  #Prints 
+  if(length(outliers) == 0){
+      outliers = "None"
+  }
+  cat("The number of outliers is", outliers, "\n")
+}
+cat("\nRotational Speed \n")
+print_outliers(maintenance$Rotational.speed..rpm.)
+
+cat("\nTorque \n")
+print_outliers(maintenance$Torque..Nm.)
+
+cat("\nTool Wear \n")
+print_outliers(maintenance$Tool.wear..min.)
+
+```
+There are outliers in the data set and they will need to be dealt with by either making a linear regression, ignoring them, or removing them from the data set.
+
+```{r}
+# Rename columns
+colnames(maintenance) <- c('udi','prod_id','type','air_temp','process_temp','rotational_speed','torque','tool_wear','target','failure_typ')
+```
+
+#### Correlation Analysis
+
+```{r}
+library(corrplot)
+```
+
+```{r}
+# Correlation analysis plot
+corrplot(cor(maintenance[,c('air_temp','process_temp','rotational_speed','torque','tool_wear')]), method = 'number', type = 'upper')
+```
+There is a strong correlation between Process Temperate and Air Temperature, as well as, Rotational Speed and Torque. This could cause issues when fitting predictive models.
+
+```{r}
+# Plot histograms
+num_cols <- sapply(maintenance, is.numeric) & colnames(maintenance) != "udi"
+num_count <- sum(num_cols)
+par(mfrow=c(ceiling(sqrt(num_count)), ceiling(sqrt(num_count))))
+for (col in colnames(maintenance)[num_cols]) {
+  hist(maintenance[[col]], main=paste('Histogram of', col), xlab=col)
+}
+```
+Because rotational speed is skewed, we need to transform
+
+```{r}
+# Apply log transformation to 'rotational_speed'
+maintenance$log_rotational_speed <- log(maintenance$rotational_speed)
+hist(maintenance$log_rotational_speed)
+```
+#### Encoding Categorical Variables
+```{r}
+# Making predictor variable a factor
+maintenance$target <- as.factor(maintenance$target)
+maintenance$type <- factor(maintenance$type)
+maintenance$failure_typ <- factor(maintenance$failure_typ)
+```
+
+## Methods
+```{r}
+# Splitting data into training and testing sets
+set.seed(1)
+index <- sample(c(T, F), nrow(maintenance), replace = T, prob = c(0.7, 0.3))
+train <- maintenance[index,]
+test <- maintenance[!index,]
+```
+
+```{r}
+library(lattice)
+library(caret)
+library(pROC)
+```
+
+### Multiple Linear Regression
+
+```{r}
+# Multiple Linear Regression
+lm_multi<-glm(target~type+torque+log_rotational_speed+air_temp+process_temp+tool_wear, data=train, family = 'binomial')
+```
+
+```{r}
+summary(lm_multi)
+```
+
+### Logistic Regression
+```{r}
+library(tidyverse)
+```
+
+```{r}
+# Logistic regression predictions
+probs <- lm_multi %>% predict(test, type = 'response')
+glm.pred <- ifelse(probs > 0.5, 1, 0)
+glm.pred <- as.factor(glm.pred)
+```
+
+```{r}
+# Logistic regression confusion matrix
+glm.conf <- confusionMatrix(test$target, glm.pred)
+glm.conf
+```
+```{r}
+# ROC chart for logistic regression model
+roc.glm <- pROC::multiclass.roc(glm.pred, as.numeric(test$target))
+```
+
+```{r}
+plot(roc.glm$rocs[[1]], print.auc=T,legacy.axes=T, print.auc.adj = c(0,7),main = 'ROC Chart for Logistic Regression')
+```
+
+### Random Forest
+```{r}
+# Random Forest
+library(randomForest)
+```
+
+```{r}
+rf <- randomForest(target ~ type+torque+log_rotational_speed+air_temp+process_temp+tool_wear, train)
+```
+
+```{r}
+rf.pred <- predict(rf, test)
+```
+
+```{r}
+# Confusion Matrix for random forest model
+cm <- table(test$target, rf.pred)
+rf.conf <- confusionMatrix(cm)
+rf.conf
+```
+```{r}
+# ROC chart for random forest model
+roc.rf <- pROC::multiclass.roc(rf.pred, as.numeric(test$target))
+```
+
+```{r}
+plot(roc.rf$rocs[[1]], print.auc=T,legacy.axes=T, print.auc.adj = c(0,7),main = 'ROC Chart for Random Forest Model')
+```
+
+### Decision Tree
+```{r}
+library(tree)
+library(ISLR2)
+#Decision Tree
+
+#Regular Decision Tree
+dt <- tree(target ~ type+torque+log_rotational_speed+air_temp+process_temp+tool_wear,
+           train)
+dt.pred <- predict(dt,test, type = "class")
+cm <- table(test$target,dt.pred)
+dt.conf <- confusionMatrix(cm)
+dt.conf
+
+```
+```{r}
+#Pruning
+prune.dt <- prune.misclass(dt, best=14)
+
+prune.dt.pred <- predict(prune.dt,test, type = "class")
+cm <- table(test$target,prune.dt.pred)
+prune.dt.conf <- confusionMatrix(cm)
+prune.dt.conf
+```
+
+```{r}
+#Plotting
+plot(prune.dt)
+text(prune.dt,pretty=0)
+```
+
+```{r}
+# ROC chart for random forest model
+roc.dt <- pROC::multiclass.roc(prune.dt.pred, as.numeric(test$target))
+```
+
+```{r}
+plot(roc.dt$rocs[[1]], print.auc=T,legacy.axes=T, print.auc.adj = c(0,7),main = 'ROC Chart for Decision Tree')
+```
+
+```{r}
+# ROC comparison chart
+plot(roc.dt$rocs[[1]], print.auc=T,legacy.axes=T, print.auc.adj = c(-1,-2),main = 'ROC Comparison')
+
+plot(roc.rf$rocs[[1]], add=T, col='red', print.auc=T,legacy.axes=T, print.auc.adj = c(-1,0))
+
+plot(roc.glm$rocs[[1]], add=T, col='blue', print.auc=T,legacy.axes=T, print.auc.adj = c(-1,2))
+
+legend('bottomright', legend = c('Decision Tree', 'Random Forest', 'Logistic Regression'), col=c('black','red','blue'),lwd=2)
+```
+
+### SVM
+```{r}
+#Clustering
+library(e1071)
+View(maintenance)
+maintenance$failure_typ <- as.integer(factor(maintenance$failure_typ))
+View(maintenance)
+svm.fit <- svm(failure_typ ~ type+torque+log_rotational_speed+air_temp+process_temp+tool_wear, train, kernel = "radial" )
+
+#Plotting
+plot(svm.fit, train,torque ~ log_rotational_speed, main= "Torque vs. Rotational Speed SVM Classification Plot" )
+plot(svm.fit, train, process_temp ~ air_temp, main = "Process Temperature vs. Process Temperature SVM Classification Plot" )
+
+#Getting the accuracy
+svm.pred <- predict(svm.fit,test, type = "class")
+cm <- table(test$failure_typ,svm.pred)
+svm.conf <- confusionMatrix(cm)
+svm.conf
+```
+# Conclusion
+
+With this study, it emphasizes the importance of determining predictive maintenance by utilizing past data to help determine potential failures before occurrences. This prediction can help save companies hundreds of millions of dollars in scrap parts, downed machine time, and tooling costs. With this study, it helped identify what the lynch pins were in the predictive maintenance model are which could then be used to implement failsafes or early detection models for machine failure. It was determined that one of the biggest contributing factors in machine failure is the quality of parts that are run through the machine. The lower the quality of parts, the higher the failure rate. Another coupling key factor contributing to machine failure is the air temperature and process temperature. Depending on the type of material being processed, both of the temperatures can impact the failure rate tremendously due to the porosity of that material. If the temperature is too low, the material has a higher chance of failure due to tooling breakages and if the temperature is too high, there is also a higher chance of failure due to overheating in machining parts. 
+
+It was found that the random forest model was the optimal choice in determining predictive maintenance due to its versatility in usage. It can be applied to both classification and regression tasks as well as its high accuracy in determining predictions and variations. Since there were thousands of data points in the study, random forest also helps alleviate some of that noise level due to its input subletting capabilities. 
+
+
+Looking into considerations or changes that we would implement for future projects, we would try to get actual data points from machining factories to be able to more accurately determine failure rates in real world scenarios. These are difficult to come by however, due to the exclusivity of this data to prevent competition from obtaining and copying the machining process being used by that specific company.
+
